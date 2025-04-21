@@ -9,9 +9,11 @@
 #   --> contextual_name = how I'll refer to it in Terraform eg. aws_instance.contextual_name.id --> resource label used only the  .tf file
 #   --> name = "name" →  name tag or setting used by AWS -->  attribute passed to AWS or the provider
 
+# data "name" {} --> data block pulls read-only data from existing AWS resources , cannot be changed
+# variable "name" {} --> Defines inputs into the Terraform config, can be user dfefined or script defined and can be changed 
 
 # ---------------------------------------
-# 0. Terrform configuration and variables
+# 0. Terrform configuration, variables
 # ---------------------------------------
 
 # Terraform configuration for AWS architecture using EC2, ALB, ASG, S3, and CloudFront
@@ -30,118 +32,218 @@ provider "aws" {
 }
 
 // variable PORT=3000
-variable "backend-port" {
+variable "backend_port" {
   description = "The port the backend listens on"
   type        = number
   default     = 3000
 }
+
+variable "project" {
+  default = "tf"
+}
+
+variable "environment" {
+  default = "dev"
+}
+
+data "aws_ami" "ubuntu" {
+  most_recent = true
+  owners      = ["099720109477"] # Canonical
+
+  filter {
+    name   = "name"
+    values = ["ubuntu/images/hvm-ssd/ubuntu-jammy-22.04-amd64-server-*"]
+  }
+}
+
+data "http" "my_ip" {
+  url = "https://ifconfig.me"
+}
+
+# gets data of the current AWS account to be able to associate resources with it 
+data "aws_caller_identity" "current" {}
 
 # --------------------------
 # 1. VPC, Subnets, IGW, etc.
 # --------------------------
 
 resource "aws_vpc" "main" {
-  cidr_block = "10.0.0.0/16" // typically assign a lkarger cidr block and should leave enough room for all subnets in the vpc
+  cidr_block = "10.0.0.0/16" // assign a larger cidr block to leave enough room for all subnets in the vpc
+  tags = {
+    Name        = "${var.project}_main_vpc"
+    Project     = var.project
+    Environment = var.environment
+  }
 }
 
 resource "aws_internet_gateway" "gw" {
   vpc_id = aws_vpc.main.id
 }
 
-// has resources that are directly accessible from the internet, such as load balancers
-resource "aws_subnet" "public-subnet" {
-  vpc_id                  = aws_vpc.main.id // defines vpc to which teh subnet belongs to
+// public subnet has resources that are directly accessible from the internet, such as load balancers
+resource "aws_subnet" "public_subnet" {
+  vpc_id                  = aws_vpc.main.id // defines vpc to which the subnet belongs to
   cidr_block              = "10.0.1.0/24" // defines the IP address range for this subnet
   availability_zone       = "eu-central-1a" // availability zone where this subnet will be located
   map_public_ip_on_launch = true
-}
-
-// private subnets are necessary for instances that shouldn't be directly accessible from the internet (e.g., backend servers that shouldn't be exposed).
-// instances in a private subnet do not have direct access to the internet
-resource "aws_subnet" "private-subnet" {
-  vpc_id                  = aws_vpc.main.id // defines vpc to which teh subnet belongs to
-  cidr_block              = "10.0.2.0/24" // defines the IP address range for this subnet - 10.0.0.0/8 is reserved for private subnets
-  availability_zone       = "eu-central-1a" // availability zone where this subnet will be located
-  map_public_ip_on_launch = false
   tags = {
-    Name = "private-subnet"
+    Name        = "${var.project}_public_subnet"
+    Project     = var.project
+    Environment = var.environment
   }
 }
 
-resource "aws_route_table" "public" {
+resource "aws_route_table" "public_rt" {
   vpc_id = aws_vpc.main.id
 
   route {
     cidr_block = "0.0.0.0/0"
     gateway_id = aws_internet_gateway.gw.id
   }
+
+  tags = {
+    Name = "${var.project}_public_route_table"
+    Project     = var.project
+    Environment = var.environment
+  }
 }
 
 resource "aws_route_table_association" "public" {
-  subnet_id      = aws_subnet.public-subnet.id
-  route_table_id = aws_route_table.public.id
+  subnet_id      = aws_subnet.public_subnet.id
+  route_table_id = aws_route_table.public_rt.id
 }
+
+# private subnets are necessary for instances that shouldn't be directly accessible from the internet (e.g., backend servers that shouldn't be exposed)
+# instances in a private subnet do not have direct access to the internet
+# decided not to use private subnet because the ec2 instances have to connect to the internet when new instance is cretaed with ASG
+# resource "aws_subnet" "private-subnet" {
+#   vpc_id                  = aws_vpc.main.id # defines vpc to which teh subnet belongs to
+#   cidr_block              = "10.0.2.0/24" # defines the IP address range for this subnet - 10.0.0.0/8 is reserved for private subnets
+#   availability_zone       = "eu-central-1a" # availability zone where this subnet will be located
+#   map_public_ip_on_launch = false
+#   tags = {
+#     Name        = "${var.project}-private-subnet"
+#     Project     = var.project
+#     Environment = var.environment
+#   }
+# }
+
+# resource "aws_route_table" "private-rt" {
+#   vpc_id = aws_vpc.main.id
+
+#   # route {} --> for now there is no route associated as the instance itself does not need access to the internet
+
+#   tags = {
+#     Name = "${var.project}-private-route-table"
+#     Project     = var.project
+#     Environment = var.environment
+#   }
+# }
+
+# resource "aws_route_table_association" "private" {
+#   subnet_id      = aws_subnet.private-subnet.id
+#   route_table_id = aws_route_table.private-rt.id
+# }
 
 # --------------------------
 # 2. Security Groups
 # --------------------------
 
-data "aws_ec2_managed_prefix_list" "cloudfront" {
+resource "aws_security_group" "ec2_security_group" {
+  name = "${var.project}_ec2_security_group"
+  vpc_id = aws_vpc.main.id
+
+  tags = {
+    Name        = "${var.project}_ec2_security_group"
+    Project     = var.project
+    Environment = var.environment
+  }
+}
+
+data "aws_ec2_managed_prefix_list" "cloudfront_prefix_list" {
   name = "com.amazonaws.global.cloudfront.origin-facing"
 }
 
-resource "aws_security_group_rule" "allow_cloudfront" {
+resource "aws_security_group" "alb_security_group" {
+  name   = "${var.project}_alb_security_group"
+  vpc_id = aws_vpc.main.id
+
+  tags = {
+    Name        = "${var.project}_alb_security_group"
+    Project     = var.project
+    Environment = var.environment
+  }
+}
+
+### rules ###
+
+# ALB ingress - allow HTTP from cloudfront
+resource "aws_security_group_rule" "alb_ingress_http" {
   type              = "ingress"
   from_port         = 80
   to_port           = 80
   protocol          = "tcp"
-  security_group_id = aws_security_group.alb-security-group.id
-  prefix_list_ids   = [data.aws_ec2_managed_prefix_list.cloudfront.id]
-  description       = "Allow CloudFront only"
+  prefix_list_ids = [data.aws_ec2_managed_prefix_list.cloudfront_prefix_list.id]
+  description     = "Allow HTTP traffic from CloudFront"
+  security_group_id = aws_security_group.alb_security_group.id
 }
 
-// TODO: change them accordingly to my rules
-resource "aws_security_group" "alb-security-group" {
-  name   = "alb-security-group"
-  vpc_id = aws_vpc.main.id
-
-  egress {
-    from_port   = 0
-    to_port     = 0
-    protocol    = "-1"
-    cidr_blocks = ["0.0.0.0/0"]
-  }
+# ALB egress to EC2 SG (optional — most leave this open)
+resource "aws_security_group_rule" "alb_egress_to_ec2" {
+  type                     = "egress"
+  from_port                = var.backend_port
+  to_port                  = var.backend_port
+  protocol                 = "tcp"
+  source_security_group_id = aws_security_group.ec2_security_group.id
+  security_group_id        = aws_security_group.alb_security_group.id
 }
 
-resource "aws_security_group" "ec2-security-group" {
-  name   = "ec2-security-group"
-  vpc_id = aws_vpc.main.id
+# EC2 ingress from ALB SG
+resource "aws_security_group_rule" "ec2_ingress_from_alb" {
+  type                     = "ingress"
+  from_port                = var.backend_port
+  to_port                  = var.backend_port
+  protocol                 = "tcp"
+  source_security_group_id = aws_security_group.alb_security_group.id
+  security_group_id        = aws_security_group.ec2_security_group.id
+}
 
-  ingress {
-    from_port       = var.backend-port
-    to_port         = var.backend-port
-    protocol        = "tcp"
-    security_groups = [aws_security_group.alb-security-group.id]
-  }
+# SSH ingress from users IP
+resource "aws_security_group_rule" "ec2_ssh_ingress_from_user_ip" {
+  type                     = "ingress"
+  from_port                = 22
+  to_port                  = 22
+  protocol                 = "tcp"
+  cidr_blocks              = ["${chomp(data.http.my_ip.body)}/32"]
+  security_group_id        = aws_security_group.ec2_security_group.id
+}
 
-  egress {
-    from_port   = 0
-    to_port     = 0
-    protocol    = "-1"
-    cidr_blocks = ["0.0.0.0/0"]
-  }
+# EC2 egress - allow all
+resource "aws_security_group_rule" "ec2_egress_all" {
+  type              = "egress"
+  from_port         = 0
+  to_port           = 0
+  protocol          = "-1"
+  cidr_blocks       = ["0.0.0.0/0"]
+  security_group_id = aws_security_group.ec2_security_group.id
 }
 
 # --------------------------
 # 3. S3 Bucket for Frontend
 # --------------------------
-resource "aws_s3_bucket" "frontend-bucket" {
-  bucket = "frontend-bucket"
+resource "aws_s3_bucket" "frontend_bucket" {
+  bucket = "frontend_bucket"
+  
+  tags = {
+    Name        = "${var.project}_frontend_bucket"
+    Project     = var.project
+    Environment = var.environment
+  }
 }
 
-// block all public access
-resource "aws_s3_bucket_public_access_block" "s3-public-access-block" {
-  bucket = aws_s3_bucket.frontend-bucket.id
+# block all public access
+resource "aws_s3_bucket_public_access_block" "s3_public_access_block" {
+  bucket = aws_s3_bucket.frontend_bucket.id
 
   block_public_acls       = true
   block_public_policy     = true
@@ -149,9 +251,8 @@ resource "aws_s3_bucket_public_access_block" "s3-public-access-block" {
   restrict_public_buckets = true
 }
 
-// TODO: change to policy allowing only cloudfront
-resource "aws_s3_bucket_policy" "frontend-bucket-policy" {
-  bucket = aws_s3_bucket.frontend-bucket.id
+resource "aws_s3_bucket_policy" "frontend_bucket_policy" {
+  bucket = aws_s3_bucket.frontend_bucket.id
   policy = jsonencode({
     Version = "2012-10-17"
     Statement = [
@@ -162,7 +263,7 @@ resource "aws_s3_bucket_policy" "frontend-bucket-policy" {
           Service = "cloudfront.amazonaws.com"
         }
         Action    = "s3:GetObject"
-        Resource  = "${aws_s3_bucket.frontend-bucket.arn}/*"
+        Resource  = "${aws_s3_bucket.frontend_bucket.arn}/*"
         Condition = {
           StringEquals = {
             "AWS:SourceArn" = "arn:aws:cloudfront::${data.aws_caller_identity.current.account_id}:distribution/${aws_cloudfront_distribution.cloudfront.id}"
@@ -173,15 +274,12 @@ resource "aws_s3_bucket_policy" "frontend-bucket-policy" {
   })
 }
 
-// THEN: when the infrastructure is built, run:
-// aws s3 sync ./build-folder-path s3://frontend-bucket --delete // --delete removes old files not in the new build
-
 # --------------------------
 # 4. CloudFront Distribution
 # --------------------------
 
-resource "aws_cloudfront_origin_access_control" "frontend-oac" {
-  name                              = "frontend-oac"
+resource "aws_cloudfront_origin_access_control" "frontend_oac" {
+  name = "${var.project}_frontend_oac"
   origin_access_control_origin_type = "s3"
   signing_behavior                  = "always"
   signing_protocol                  = "sigv4"
@@ -192,6 +290,12 @@ resource "aws_cloudfront_distribution" "cloudfront" {
   is_ipv6_enabled     = true
   default_root_object = "index.html"
 
+  tags = {
+    Name        = "${var.project}_cloudfront"
+    Project     = var.project
+    Environment = var.environment
+  }
+
   // must explicitly say "I do not want to restrict traffic based on any country" 
   restrictions {
     geo_restriction {
@@ -201,9 +305,9 @@ resource "aws_cloudfront_distribution" "cloudfront" {
 
   # Origin for S3 (Frontend)
   origin {
-    domain_name = aws_s3_bucket.frontend-bucket.bucket_regional_domain_name // cannot be the website_endpoint, must be regional_domain_name when using cloudfront !!!
-    origin_id   = "s3-frontend-origin"
-    origin_access_control_id = aws_cloudfront_origin_access_control.frontend-oac.id
+    domain_name = aws_s3_bucket.frontend_bucket.bucket_regional_domain_name // cannot be the website_endpoint, must be regional_domain_name when using cloudfront !!!
+    origin_id   = "s3_frontend_origin"
+    origin_access_control_id = aws_cloudfront_origin_access_control.frontend_oac.id
     custom_origin_config {
       http_port              = 80
       https_port             = 443
@@ -213,7 +317,7 @@ resource "aws_cloudfront_distribution" "cloudfront" {
   }
   # 🌍 Default behavior (Frontend)
   default_cache_behavior {
-    target_origin_id       = "s3-frontend-origin"
+    target_origin_id       = "s3_frontend_origin"
     viewer_protocol_policy = "redirect-to-https"
     allowed_methods        = ["GET", "HEAD"]
     cached_methods         = ["GET", "HEAD"]
@@ -231,7 +335,7 @@ resource "aws_cloudfront_distribution" "cloudfront" {
   # Origin for ALB (Backend API)
   origin {
     domain_name = aws_lb.alb.dns_name
-    origin_id   = "alb-backend"
+    origin_id   = "alb_backend"
 
     custom_origin_config {
       http_port              = 80
@@ -244,7 +348,7 @@ resource "aws_cloudfront_distribution" "cloudfront" {
   # 🔧 Backend API (e.g., /api/*)
   ordered_cache_behavior {
     path_pattern           = "/api/*"
-    target_origin_id       = "alb-backend"
+    target_origin_id       = "alb_backend"
     viewer_protocol_policy = "redirect-to-https"
     allowed_methods        = ["GET", "HEAD", "OPTIONS", "POST", "PUT", "PATCH", "DELETE"]
     cached_methods         = ["GET", "HEAD"]
@@ -273,20 +377,26 @@ resource "aws_cloudfront_distribution" "cloudfront" {
 # --------------------------
 # 5. Application Load Balancer
 # --------------------------
-resource "aws_lb" "backend-alb" {
-  name               = "backend-alb"
+resource "aws_lb" "backend_alb" {
+  name = "${var.project}_backend_alb"
   internal           = false
   load_balancer_type = "application"
-  subnets            = [aws_subnet.public-subnet.id]
-  security_groups    = [aws_security_group.alb-security-group.id]
+  subnets            = [aws_subnet.public_subnet.id]
+  security_groups    = [aws_security_group.alb_security_group.id]
 
   enable_deletion_protection = false
+  
+  tags = {
+    Name        = "${var.project}_backend_alb"
+    Project     = var.project
+    Environment = var.environment
+  }
 }
 
 // where the alb should forward requests
-resource "aws_lb_target_group" "backend-target-group" {
-  name     = "backend-target-group"
-  port     = var.backend-port
+resource "aws_lb_target_group" "backend_target_group" {
+  name = "${var.project}_backend_target_group"
+  port     = var.backend_port
   protocol = "HTTP"
   vpc_id   = aws_vpc.main.id
   target_type = "instance"
@@ -294,24 +404,36 @@ resource "aws_lb_target_group" "backend-target-group" {
   health_check {
     path                = "/api/health"
     protocol            = "HTTP"
-    port                = "${var.backend-port}"
+    port                = "${var.backend_port}"
     interval            = 300
     timeout             = 5
     healthy_threshold   = 2
     unhealthy_threshold = 2
   }
+
+  tags = {
+    Name        = "${var.project}_backend_target_group"
+    Project     = var.project
+    Environment = var.environment
+  }
 }
 
 // alb listens http traffic (which will come only from cloudfront thanks to security group)
 // if there were multiple target groups, multiple listener rules with different routes could be configured
-resource "aws_lb_listener" "alb-backend-listener" {
-  load_balancer_arn = aws_lb.backend-alb.arn
+resource "aws_lb_listener" "alb_backend_listener" {
+  load_balancer_arn = aws_lb.backend_alb.arn
   port              = "80"
   protocol          = "HTTP"
 
   default_action {
     type             = "forward"
-    target_group_arn = aws_lb_target_group.backend-target-group.arn
+    target_group_arn = aws_lb_target_group.backend_target_group.arn
+  }
+
+  tags = {
+    Name        = "${var.project}_alb_backend_listener"
+    Project     = var.project
+    Environment = var.environment
   }
 }
 
@@ -319,23 +441,18 @@ resource "aws_lb_listener" "alb-backend-listener" {
 # 5. Launch Template
 # --------------------------
 
-// TODO: create AMI
-variable "backend-ami-id" {
-  description = "AMI ID for Ubuntu with Docker" // todo
-  type        = string
+# get the public SSH key
+resource "aws_key_pair" "deployer" {
+  key_name   = "EC2_SSH_KEY"
+  public_key = file("./.keys/EC2_SSH_KEY.pub")
 }
 
-// TODO: how do i input it in with terrform.tfvars?
-variable "ec2-ssh-key-name" {
-  description = "EC2 key pair name for SSH access"
-  type        = string
-}
-
-resource "aws_launch_template" "backend-launch-template" {
-  name_prefix   = "backend-launch-template"
-  image_id      = var.backend-ami-id // TODO: backend-ami
+# attach the key to the EC2 instance
+resource "aws_launch_template" "backend_launch_template" {
+  name_prefix   = "${var.project}_backend_launch_template"
+  image_id      = data.aws_ami.ubuntu.id # insert ubuntu ami and run user data script to get docker and needed files in it
   instance_type = "t2.micro"
-  key_name      = var.ec2-ssh-key-name
+  key_name = aws_key_pair.deployer.key_name # to gain SSH access to the EC2 instances
 
   lifecycle { // avoids downtime by creating a new template before destroying the old one during changes
     create_before_destroy = true
@@ -343,64 +460,63 @@ resource "aws_launch_template" "backend-launch-template" {
 
   network_interfaces {
     associate_public_ip_address = true
-    security_groups = [aws_security_group.ec2-security-group.id]
+    security_groups = [aws_security_group.ec2_security_group.id]
   }
 
-// startup script that runs when the EC2 instance first boots
-// installs docker and 
-user_data = base64encode(<<-EOF
-              #!/bin/bash
-              set -e
+# startup script that runs when the EC2 instance first boots, injecting needed terraform variables 
+  user_data = base64encode(templatefile("./user_data.sh.tpl", {
+    backend_port  = var.backend_port,
+    frontend_origin = aws_cloudfront_distribution.cloudfront.domain_name # backend code depends on FRONTEND_ORIGIN for CORS
+  }))
 
-              apt update -y
-              apt install -y ca-certificates curl gnupg lsb-release
-              sudo install -m 0755 -d /etc/apt/keyrings
-              curl -fsSL https://download.docker.com/linux/ubuntu/gpg | tee /etc/apt/keyrings/docker.asc > /dev/null
-              chmod a+r /etc/apt/keyrings/docker.asc
-
-              echo "deb [arch=$(dpkg --print-architecture) signed-by=/etc/apt/keyrings/docker.asc] \
-              https://download.docker.com/linux/ubuntu $(lsb_release -cs) stable" > /etc/apt/sources.list.d/docker.list
-              
-              apt update -y
-              apt install -y docker-ce docker-ce-cli containerd.io docker-buildx-plugin docker-compose-plugin
-              systemctl enable docker
-              systemctl start docker
-
-              docker pull zuzanapiarova/backend-image:latest
-              docker run -d --restart always -p \${var.backend-port}:${var.backend-port} \
-                -e PORT=\${var.backend-port} \
-                -e FRONTEND_ORIGIN=https://\${aws_cloudfront_distribution.cdn.domain_name} \\
-              zuzanapiarova/backend-image:latest
-              EOF
-            )
+  tags = {
+    Name        = "${var.project}_backend_launch_template"
+    Project     = var.project
+    Environment = var.environment
+  }
 }
 
 # --------------------------
 # 7. Auto Scaling Group
 # --------------------------
-resource "aws_autoscaling_group" "backend-asg" {
-  name = "backend-asg"
+resource "aws_autoscaling_group" "backend_asg" {
+  name = "${var.project}_backend_asg"
   desired_capacity     = 1
   max_size             = 1
   min_size             = 1
   health_check_type    = "ELB" // makes sure the instance is considered healthy by ALB
-  health_check_grace_period = 120 // time in seconds that Auto Scaling should wait after launching an instance before checking its health
-  vpc_zone_identifier  = [aws_subnet.private-subnet.id]
-  target_group_arns    = [aws_lb_target_group.backend-target-group.arn]
+  health_check_grace_period = 150 // time in seconds that Auto Scaling should wait after launching an instance before checking its health
+  vpc_zone_identifier  = [aws_subnet.public_subnet.id]
+  target_group_arns    = [aws_lb_target_group.backend_target_group.arn]
+  depends_on = [aws_launch_template.backend_launch_template]
 
   launch_template {
-    id      = aws_launch_template.backend-launch-template.id
+    id      = aws_launch_template.backend_launch_template.id
     version = "$Latest"
   }
 
-  // tag it in aws with this information
   tag {
     key                 = "Name"
-    value               = "backend-instance"
+    value               = "${var.project}_ec2_backend_instance"
     propagate_at_launch = true
   }
   
   lifecycle {
     create_before_destroy = true
   }
+}
+
+# --------------------------
+# 7. End messages and outputs
+# --------------------------
+
+# exporting created values needed for CORS
+output "cloudfront_domain_name" {
+  value = aws_cloudfront_distribution.cloudfront.domain_name
+  description = "The domain name of the CloudFront distribution"
+}
+
+output "frontend_bucket_name" {
+  value = aws_s3_bucket.frontend_bucket.bucket
+  description = "The name of the S3 bucket used for the frontend"
 }

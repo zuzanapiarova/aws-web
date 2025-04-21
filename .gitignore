@@ -3,6 +3,10 @@ node_modules/
 package-lock.json
 yarn.lock
 
+# Secrets
+.keys/
+*/.keys/
+
 # Environment variables
 .env
 .env.local

@@ -8,8 +8,7 @@ function App() {
 
   const handleClick = () => {
     const apiUrl = process.env.REACT_APP_API_URL; // Ensure this matches the environment variable name
-    console.log("Calling API at:", apiUrl); 
-    axios.get(apiUrl) // this gets backend.net/api and passes the header
+    axios.get(apiUrl) // this gets website.net/api and passes the header
     .then((res) => {
       console.log(res.data);
       setResponse(res.data.message);
