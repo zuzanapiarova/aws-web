@@ -6,6 +6,18 @@ set -e # exit immediately if any command fails (non-zero exit code), with Terraf
 
 echo "Ensure you are executing this project from the root of the cloned GitHub repository !"
 
+# check if terraform, aws, git, adn npm are all installed
+echo "Checking required tools"
+tools=("terraform" "aws" "git" "npm")
+for tool in "${tools[@]}"; do
+  if command -v $tool &> /dev/null; then
+    echo "✅ $tool is installed: $($tool --version | head -n 1)"
+  else
+    echo "❌ $tool is NOT installed"
+    exit 1
+  fi
+done
+
 # need an EC2 SSH key access - create public(.pub)-private() key pair and store it in ./keys/EC2_SSH_KEY ⚠️ Never share the private key. Keep it safe!
 mkdir -p .keys
 ssh-keygen -t rsa -b 4096 -f ./.keys/EC2_SSH_KEY
@@ -48,13 +60,3 @@ npm run build
 
 # import the build files into s3 with proper name of the S3 bucket
 aws s3 sync ./build s3://$FRONTEND_BUCKET --delete # --delete removes old files not in the new build
-
-
-
-
-
-# AMI is dependent on cloudfront and has to be created before launch template
-# AMI needs one .env - FRONTEND_ORIGIN, which is the Cloudfront origin domain
-# once cloudfront is created, we can create a docker image from the backend and pass it the 
-# and create ami from the docker image 
-# Allow others to input their AMI ID by setting it as a variable that the user can set in the terraform.tfvars file or through other means.

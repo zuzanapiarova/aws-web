@@ -1,5 +1,6 @@
 #!/bin/bash
 
+# THIS SCRIPT IS EXECUTED EACH TIME A NEW EC2 INSTANCE IS CREATED BY ASG AS ROOT OF THE EC2
 # quit execution when any error is encountered
 set -e
 
