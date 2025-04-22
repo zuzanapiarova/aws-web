@@ -18,7 +18,7 @@ for tool in "${tools[@]}"; do
   fi
 done
 
-# need an EC2 SSH key access - create public(.pub)-private() key pair and store it in ./keys/EC2_SSH_KEY ⚠️ Never share the private key. Keep it safe!
+# need an EC2 SSH key access - create public(.pub)-private() key pair and store it in ./keys/EC2_SSH_KEY. Never share the private key!
 mkdir -p .keys
 ssh-keygen -t rsa -b 4096 -f ./.keys/EC2_SSH_KEY
 chmod 400 ./.keys/EC2_SSH_KEY.pub
@@ -32,18 +32,18 @@ terraform init
 
 # avoiding the Circular Dependency between Cloudfront and S3 Bucket Policy - policy depends on cloudfront id, but cloudfront depends on the S3 bucket origin
 echo "Step 1: Creating S3 bucket (without policy)"
-terraform apply -target=aws_s3_bucket.frontend-bucket -auto-approve
-echo "Step 2: Creating CloudFront distribution"
-terraform apply -target=aws_cloudfront_distribution.cloudfront -auto-approve
+terraform apply -target=aws_s3_bucket.frontend_bucket -auto-approve
+echo "Step 2: Creating CloudFront distribution" # create route table too because it is dependent on it, just no code dependencies 
+terraform apply -target=aws_route_table.public_rt -target=aws_cloudfront_distribution.cloudfront -auto-approve
 echo "Step 3: Applying all remaining infrastructure (including bucket policy and lunch template using the AMI)"
-terraform apply -auto-approve
+terraform apply
 echo "All infrastructure created successfully!"
 
 # WHEN THE INFRASTRUCTURE IS BUILT, NEED TO PROVIDE THE FRONTEND FILES
 # create needed variables on which the frontend/backend depends on for CORS 
 CLOUDFRONT_DOMAIN=$(terraform output -raw cloudfront_domain_name)
-FRONTEND_BUCKET=$(terraform output -raw frontend_bucket_name)
 echo "CloudFront domain: $CLOUDFRONT_DOMAIN"
+FRONTEND_BUCKET=$(terraform output -raw frontend_bucket_name)
 echo "Frontend bucket: $FRONTEND_BUCKET"
 
 # make sure the user is in correct repository
@@ -54,9 +54,10 @@ fi
 
 # build frontend witht the proper variable for API_URL
 cd frontend
-echo "REACT_APP_API_URL=$CLOUDFRONT_DOMAIN/api" > .env
+echo "REACT_APP_API_URL=https://$CLOUDFRONT_DOMAIN/api" > .env
 npm install
 npm run build
 
 # import the build files into s3 with proper name of the S3 bucket
 aws s3 sync ./build s3://$FRONTEND_BUCKET --delete # --delete removes old files not in the new build
+echo "Enter the website at $CLOUDFRONT_DOMAIN !"

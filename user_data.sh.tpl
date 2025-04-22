@@ -24,10 +24,8 @@ apt install -y docker-ce docker-ce-cli containerd.io docker-buildx-plugin docker
 # enable and start Docker
 systemctl enable docker
 systemctl start docker
+usermod -aG docker ubuntu # by default only root can interact with docker, add the user who will be connected via ssh
 
 # pull and run the Docker image
 docker pull zuzanapiarova/cloud-programming-backend-image:latest
-docker run -d --restart always -p ${backend_port}:${backend_port} \
--e PORT=${backend_port} \
--e FRONTEND_ORIGIN=https://${frontend_origin} \ 
-zuzanapiarova/backend-image:latest 
+docker run -d --restart always -p ${backend_port}:${backend_port} -e PORT=${backend_port} -e FRONTEND_ORIGIN="https://${frontend_origin}" zuzanapiarova/cloud-programming-backend-image:latest 
