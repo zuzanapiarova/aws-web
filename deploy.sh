@@ -10,7 +10,7 @@ echo "Ensure you are executing this project from the root of the cloned GitHub r
 echo "Checking required tools"
 tools=("terraform" "aws" "git" "npm")
 for tool in "${tools[@]}"; do
-  if command -v $tool &> /dev/null; then
+  if command -v $tool &> /deva/null; then
     echo "✅ $tool is installed: $($tool --version | head -n 1)"
   else
     echo "❌ $tool is NOT installed"

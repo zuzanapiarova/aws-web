@@ -4,11 +4,12 @@ const cors = require("cors");
 
 const app = express();
 
-// can delete later ?
+app.use(express.json());
+
 // Enable CORS to allow only CloudFront domain
 app.use(cors({
   origin: process.env.FRONTEND_ORIGIN, // CloudFront domain
-  methods: ['GET', 'POST', 'PUT', 'DELETE'],
+  methods: ['GET', 'POST', 'PUT', 'DELETE', 'OPTIONS'],
   allowedHeaders: ['Content-Type']
 }));
 

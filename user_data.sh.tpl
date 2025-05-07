@@ -29,3 +29,4 @@ usermod -aG docker ubuntu # by default only root can interact with docker, add t
 # pull and run the Docker image
 docker pull zuzanapiarova/cloud-programming-backend-image:latest
 docker run -d --restart always -p ${backend_port}:${backend_port} -e PORT=${backend_port} -e FRONTEND_ORIGIN="https://${frontend_origin}" zuzanapiarova/cloud-programming-backend-image:latest 
+# docker run -d --restart always -p 3000:3000 -e PORT=3000 -e FRONTEND_ORIGIN="https://dxpjhlbhg6jgn.cloudfront.net" zuzanapiarova/backend-image:latest 
